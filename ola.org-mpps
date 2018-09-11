@@ -1,0 +1,96 @@
+#!/bin/bash
+
+# https://www.ola.org/en/members/current/contact-information
+
+url='https://www.ola.org/sites/default/files/mpp_contact_information_2018_09_11_13_50-357535bb.csv'
+  # ^ only valid until Tue, 25 Sep 2018 17:51:07 GMT
+  # but it looks like the file sticks around for longer..?
+
+function print_usage {
+	cat <<-_END_OF_HELP_
+	NAME
+	  ${0##*/} - pretty up the list of MPPs a bit, send to stdout
+
+	SYNOPSIS
+	  ${0##*/} [-h] [-u url] [-f file]
+
+	DESCRIPTION
+	  -h	print this help text and exit
+
+	  -u url
+	 	retrieve the raw MPP CSV file from 'url' before processing
+
+	 	NB. this URL is usually ephemeral so you may have to visit
+	 	https://www.ola.org/en/members/current/contact-information
+	 	in your browser to generate a fresh URL first
+
+	 	NB. this will populate '.log' and '.headers' files in your
+	 	current working directory for reference/troubleshooting
+
+	  -f file
+	 	simply clean up the contents of local CSV named 'file' and
+	 	skip the retrieval step
+
+	  NB. in normal processing the CSV filename will be extracted from
+	  the '.log' file; if ${0##*/} is invoked without options, it will
+	  run this step and (hopefully) write the cleaned file to stdout
+
+	HINTS
+	  Try piping the output to:
+
+	 	awk -F, 'BEGIN{OFS=OFS}; {print \$2, \$15}' | column -s, -t
+
+	BUGS
+	  Please report bugs to 
+
+	_END_OF_HELP_
+}
+
+while getopts 'hu:f:' OPT ; do case "$OPT" in
+  (h)	print_usage ; exit 0 ;;
+  (u)	url=$OPTARG ;;
+  (f)	fn=$OPTARG  ;;
+  (*)	printf 'Unrecognized option "%s"\n' "$OPT" >> /dev/stderr
+	exit 1 ;;
+esac ; done ; shift $((OPTIND-1))
+
+if [[ ${fn-UNSET} == UNSET ]] ; then
+	if [[ ${url-UNSET} == UNSET ]] ; then
+		printf 'please specify either a url (-u) or a file (-f)\n' \
+		  >> /dev/stderr
+		exit 1
+	fi
+	curl --fail -vLOJ -D .headers --stderr .log -- "$url" || exit $?
+	fn=$( \
+	  dos2unix < .log | \
+	  awk '/^> GET.*HTTP\/1\.1$/{sub(/.*\//,"",$3); print $3}' \
+	)
+fi
+
+awk '
+BEGIN {
+	OFS = FS = ","
+}
+
+{
+	for (i=1; i<=NF; i++) {
+		gsub(/(^[ \t]*|[ \t]*$)/, "", $i)
+		gsub(/&#039;/, sprintf("%c", 39), $i)
+		gsub(/&amp;/, "&", $i)
+	}
+	if (1 == NR) {
+		$13 = "Toll-free"
+		$14 = "Telephone"
+		$15 = "Fax"
+	} else {
+		$15 = $14 = $13 = $12
+		$13 = ((match($13, /Toll free:  [0-9-]+/)) ? \
+		  substr($13, RSTART+12, RLENGTH-13) : "")
+		$14 = ((match($14, /Fax:  [0-9-]+/))       ? \
+		  substr($14, RSTART+6,  RLENGTH-7)  : "")
+		$15 = ((match($15, /Tel:  [0-9-]+/))       ? \
+		  substr($15, RSTART+6,  RLENGTH-7)  : "")
+	}
+}
+
+1' "$fn"
